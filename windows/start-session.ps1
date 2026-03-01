@@ -1,6 +1,6 @@
 # @raycast.schemaVersion 1
 # @raycast.title Start Grafana Export Session
-# @raycast.mode silent
+# @raycast.mode fullOutput
 # @raycast.packageName Grafana
 # @raycast.icon 🖨️
 
@@ -12,9 +12,11 @@ $dir     = "$env:USERPROFILE\.grafana-png-exporter"
 $pidFile = "$dir\session.pid"
 $script  = "$env:USERPROFILE\raycast\scripts\grafana-png-export.py"
 
-if (Test-Path $pidFile) {
+if (Test-Path $pidFile)
+{
     $savedPid = [int](Get-Content $pidFile -Raw).Trim()
-    if (Get-Process -Id $savedPid -ErrorAction SilentlyContinue) {
+    if (Get-Process -Id $savedPid -ErrorAction SilentlyContinue)
+    {
         Add-Type -AssemblyName System.Windows.Forms
         $n = New-Object System.Windows.Forms.NotifyIcon
         $n.Icon    = [System.Drawing.SystemIcons]::Information
