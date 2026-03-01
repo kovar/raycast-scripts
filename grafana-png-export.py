@@ -364,22 +364,19 @@ def do_export(driver, output_dir: str) -> str:
     """)
     time.sleep(1)
 
-    content_w = driver.execute_script("return document.documentElement.scrollWidth")
-    content_h = driver.execute_script("return document.documentElement.scrollHeight")
-
-    target_w = 1920  # intended CSS viewport width
-    scale = target_w / content_w if content_w else 1.0
-    print(f"✅ Content size: {content_w}x{content_h} CSS px, PDF scale: {scale:.3f}")
+    w = driver.execute_script("return document.documentElement.scrollWidth")
+    h = driver.execute_script("return document.documentElement.scrollHeight")
+    print(f"✅ Content size: {w}x{h} CSS px")
 
     pdf_data = driver.execute_cdp_cmd("Page.printToPDF", {
         "printBackground": True,
-        "paperWidth": target_w / 96,
-        "paperHeight": content_h * scale / 96,
+        "paperWidth": w / 96,
+        "paperHeight": h / 96,
         "marginTop": 0,
         "marginBottom": 0,
         "marginLeft": 0,
         "marginRight": 0,
-        "scale": scale,
+        "scale": 1.0,
     })
 
     os.makedirs(output_dir, exist_ok=True)
@@ -392,7 +389,7 @@ def do_export(driver, output_dir: str) -> str:
 
     pdftoppm = _find_pdftoppm()
     result = subprocess.run(
-        [pdftoppm, "-r", "300", "-png", "-singlefile", pdf_path, prefix],
+        [pdftoppm, "-scale-to-x", "6000", "-scale-to-y", "-1", "-png", "-singlefile", pdf_path, prefix],
         capture_output=True,
     )
     os.remove(pdf_path)
