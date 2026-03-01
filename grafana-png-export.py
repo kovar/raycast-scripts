@@ -39,7 +39,7 @@ def platform_default_browser():
     if system == "darwin":
         return "brave"
     elif system == "windows":
-        return "edge"
+        return "brave"
     return "chrome"
 
 
