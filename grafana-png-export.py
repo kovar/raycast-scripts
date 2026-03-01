@@ -49,8 +49,15 @@ def get_browser_config(browser_name: str):
 
     system = platform.system().lower()
     if browser_name == "brave":
-        binary = "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser" if system == "darwin" \
-            else r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe"
+        if system == "darwin":
+            binary = "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"
+        else:
+            candidates = [
+                r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe",
+                os.path.expandvars(r"%LOCALAPPDATA%\BraveSoftware\Brave-Browser\Application\brave.exe"),
+            ]
+            binary = next((p for p in candidates if os.path.exists(p)), candidates[0])
+            print(f"✅ Brave binary: {binary}")
         return binary, automation_profile
 
     elif browser_name == "edge":
