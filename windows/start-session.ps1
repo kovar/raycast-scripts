@@ -1,6 +1,6 @@
 # @raycast.schemaVersion 1
 # @raycast.title Start Grafana Export Session
-# @raycast.mode fullOutput
+# @raycast.mode silent
 # @raycast.packageName Grafana
 # @raycast.icon 🖨️
 
