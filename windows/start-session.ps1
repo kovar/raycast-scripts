@@ -6,7 +6,7 @@
 
 # Dependencies:
 #   uv:      powershell -ExecutionPolicy Bypass -c "irm https://astral.sh/uv/install.ps1 | iex"
-#   poppler: scoop install poppler   (provides pdftoppm for PDF→PNG conversion)
+#   poppler: winget install oschwartz10612.Poppler   (provides pdftoppm for PDF→PNG conversion)
 
 $dir     = "$env:USERPROFILE\.grafana-png-exporter"
 $pidFile = "$dir\session.pid"
