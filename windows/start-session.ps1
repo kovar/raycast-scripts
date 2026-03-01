@@ -27,9 +27,14 @@ if (Test-Path $pidFile) {
 }
 
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
-Start-Process `
-    -FilePath "$env:USERPROFILE\.local\bin\uv.exe" `
-    -ArgumentList "run", $script `
+
+# Write a launcher script that handles its own I/O redirection.
+# This avoids the -WindowStyle Hidden + -RedirectStandardOutput incompatibility.
+$launcher = "$dir\launcher.ps1"
+@"
+& '$env:USERPROFILE\.local\bin\uv.exe' run '$script' *> '$dir\session.log'
+"@ | Set-Content $launcher
+
+Start-Process powershell `
     -WindowStyle Hidden `
-    -RedirectStandardOutput "$dir\session.log" `
-    -RedirectStandardError  "$dir\session-err.log"
+    -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $launcher
