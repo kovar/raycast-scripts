@@ -193,14 +193,17 @@ def _find_pdftoppm() -> str:
         "/usr/bin/pdftoppm",
         r"C:\Program Files\poppler\Library\bin\pdftoppm.exe",
     ]
-    for pattern in [r"C:\Program Files\poppler-*\Library\bin\pdftoppm.exe",
-                    r"C:\ProgramData\scoop\apps\poppler\*\bin\pdftoppm.exe"]:
+    for pattern in [
+        r"C:\Program Files\poppler-*\Library\bin\pdftoppm.exe",
+        r"C:\ProgramData\scoop\apps\poppler\*\bin\pdftoppm.exe",
+        os.path.expandvars(r"%LOCALAPPDATA%\Programs\poppler-*\Library\bin\pdftoppm.exe"),
+    ]:
         candidates.extend(glob.glob(pattern))
     for c in candidates:
         if os.path.isfile(c):
             return c
     if platform.system() == "Windows":
-        raise RuntimeError("pdftoppm not found. Install poppler: scoop install poppler")
+        raise RuntimeError("pdftoppm not found. Install poppler: winget install oschwartz10612.Poppler")
     raise RuntimeError("pdftoppm not found. Install poppler: brew install poppler")
 
 
