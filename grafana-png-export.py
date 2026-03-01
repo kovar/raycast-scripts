@@ -375,6 +375,11 @@ def main():
         auto_login(driver, args.username, args.password)
 
     os.makedirs(DATA_DIR, exist_ok=True)
+    for stale in (EXPORT_TRIGGER, STOP_TRIGGER):
+        try:
+            os.remove(stale)
+        except OSError:
+            pass
     with open(PID_FILE, "w") as f:
         f.write(str(os.getpid()))
 
