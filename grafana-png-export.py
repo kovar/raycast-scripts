@@ -113,6 +113,9 @@ def create_driver(browser_name: str, user_data_dir: str = None, dpr: int = 4):
         if binary:
             opts.binary_location = binary
         opts.add_argument("--disable-blink-features=AutomationControlled")
+        opts.add_argument("--disable-background-timer-throttling")
+        opts.add_argument("--disable-renderer-backgrounding")
+        opts.add_argument("--disable-backgrounding-occluded-windows")
         return opts
 
     if is_debug_port_open():
@@ -288,6 +291,7 @@ def _run_loop(driver, args):
         print("✅ Session ready. Watching for trigger files...")
         try:
             last_keepalive = time.monotonic()
+            keepalive_failures = 0
             while True:
                 if os.path.exists(STOP_TRIGGER):
                     try:
@@ -309,11 +313,16 @@ def _run_loop(driver, args):
                         notify(f"Export failed: {e}")
                         print(f"❌ Export failed: {e}")
                     last_keepalive = time.monotonic()
-                elif time.monotonic() - last_keepalive >= 30:
+                elif time.monotonic() - last_keepalive >= 15:
                     try:
                         driver.execute_script("return 1")
-                    except Exception:
-                        pass
+                        keepalive_failures = 0
+                    except Exception as e:
+                        keepalive_failures += 1
+                        print(f"⚠️ Keep-alive failed ({keepalive_failures}): {e}")
+                        if keepalive_failures >= 3:
+                            print("❌ Browser connection lost, ending session")
+                            break
                     last_keepalive = time.monotonic()
                 time.sleep(0.5)
         except KeyboardInterrupt:
