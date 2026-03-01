@@ -27,8 +27,9 @@ if (Test-Path $pidFile) {
 }
 
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
-Start-Process -NoNewWindow `
+Start-Process `
     -FilePath "$env:USERPROFILE\.local\bin\uv.exe" `
     -ArgumentList "run", $script `
+    -WindowStyle Hidden `
     -RedirectStandardOutput "$dir\session.log" `
     -RedirectStandardError  "$dir\session-err.log"
