@@ -16,7 +16,7 @@ if (-not $running) {
     $n = New-Object System.Windows.Forms.NotifyIcon
     $n.Icon    = [System.Drawing.SystemIcons]::Warning
     $n.Visible = $true
-    $n.ShowBalloonTip(5000, "Grafana Exporter", "No active session — run 'Start Grafana Export Session' first", 2)
+    $n.ShowBalloonTip(5000, "Grafana Exporter", "No active session - run 'Start Grafana Export Session' first", 2)
     Start-Sleep -Milliseconds 500
     $n.Dispose()
     exit 1
