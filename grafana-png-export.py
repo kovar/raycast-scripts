@@ -232,8 +232,6 @@ def create_driver(browser_name: str, user_data_dir: str = None, dpr: int = 4):
         opts.add_argument("--disable-background-timer-throttling")
         opts.add_argument("--disable-renderer-backgrounding")
         opts.add_argument("--disable-backgrounding-occluded-windows")
-        if platform.system() == "Windows":
-            opts.add_argument("--force-device-scale-factor=1")
         return opts
 
     if is_debug_port_open():
@@ -366,7 +364,6 @@ def do_export(driver, output_dir: str) -> str:
 
     w = driver.execute_script("return document.documentElement.scrollWidth")
     h = driver.execute_script("return document.documentElement.scrollHeight")
-    print(f"✅ Content size: {w}x{h} CSS px")
 
     pdf_data = driver.execute_cdp_cmd("Page.printToPDF", {
         "printBackground": True,
@@ -389,7 +386,7 @@ def do_export(driver, output_dir: str) -> str:
 
     pdftoppm = _find_pdftoppm()
     result = subprocess.run(
-        [pdftoppm, "-scale-to-x", "6000", "-scale-to-y", "-1", "-png", "-singlefile", pdf_path, prefix],
+        [pdftoppm, "-r", "300", "-png", "-singlefile", pdf_path, prefix],
         capture_output=True,
     )
     os.remove(pdf_path)
