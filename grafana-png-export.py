@@ -218,7 +218,6 @@ def apply_session_settings(driver, dpr: int = 4):
         "deviceScaleFactor": dpr,
         "mobile": False,
     })
-    driver.set_window_size(1920, 1080)
     print(f"✅ Device pixel ratio: {dpr}x")
 
 
@@ -233,6 +232,8 @@ def create_driver(browser_name: str, user_data_dir: str = None, dpr: int = 4):
         opts.add_argument("--disable-background-timer-throttling")
         opts.add_argument("--disable-renderer-backgrounding")
         opts.add_argument("--disable-backgrounding-occluded-windows")
+        if platform.system() == "Windows":
+            opts.add_argument("--force-device-scale-factor=1")
         return opts
 
     if is_debug_port_open():
