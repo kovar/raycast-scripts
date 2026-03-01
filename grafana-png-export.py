@@ -364,18 +364,22 @@ def do_export(driver, output_dir: str) -> str:
     """)
     time.sleep(1)
 
-    w = driver.execute_script("return document.documentElement.scrollWidth")
-    h = driver.execute_script("return document.documentElement.scrollHeight")
+    content_w = driver.execute_script("return document.documentElement.scrollWidth")
+    content_h = driver.execute_script("return document.documentElement.scrollHeight")
+
+    target_w = 1920  # intended CSS viewport width
+    scale = target_w / content_w if content_w else 1.0
+    print(f"✅ Content size: {content_w}x{content_h} CSS px, PDF scale: {scale:.3f}")
 
     pdf_data = driver.execute_cdp_cmd("Page.printToPDF", {
         "printBackground": True,
-        "paperWidth": w / 96,
-        "paperHeight": h / 96,
+        "paperWidth": target_w / 96,
+        "paperHeight": content_h * scale / 96,
         "marginTop": 0,
         "marginBottom": 0,
         "marginLeft": 0,
         "marginRight": 0,
-        "scale": 1.0,
+        "scale": scale,
     })
 
     os.makedirs(output_dir, exist_ok=True)
