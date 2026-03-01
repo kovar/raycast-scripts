@@ -6,6 +6,7 @@
 # ]
 # ///
 
+import sys
 import time
 import os
 import base64
@@ -16,6 +17,10 @@ import signal
 import subprocess
 import threading
 import glob
+
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
