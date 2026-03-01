@@ -1,6 +1,6 @@
 # @raycast.schemaVersion 1
 # @raycast.title Export Grafana PNG Now
-# @raycast.mode fullOutputtput
+# @raycast.mode silent
 # @raycast.packageName Grafana
 # @raycast.icon 📄
 
