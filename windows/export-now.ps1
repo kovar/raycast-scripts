@@ -1,6 +1,6 @@
 # @raycast.schemaVersion 1
 # @raycast.title Export Grafana PNG Now
-# @raycast.mode silent
+# @raycast.mode fullOutputtput
 # @raycast.packageName Grafana
 # @raycast.icon 📄
 
@@ -9,9 +9,10 @@ $pidFile = "$dir\session.pid"
 $trigger = "$dir\export.trigger"
 
 $running = (Test-Path $pidFile) -and `
-           (Get-Process -Id ([int](Get-Content $pidFile -Raw).Trim()) -ErrorAction SilentlyContinue)
+(Get-Process -Id ([int](Get-Content $pidFile -Raw).Trim()) -ErrorAction SilentlyContinue)
 
-if (-not $running) {
+if (-not $running)
+{
     Add-Type -AssemblyName System.Windows.Forms
     $n = New-Object System.Windows.Forms.NotifyIcon
     $n.Icon    = [System.Drawing.SystemIcons]::Warning
