@@ -287,6 +287,7 @@ def _run_loop(driver, args):
     if platform.system() == "Windows":
         print("✅ Session ready. Watching for trigger files...")
         try:
+            last_keepalive = time.monotonic()
             while True:
                 if os.path.exists(STOP_TRIGGER):
                     try:
@@ -307,6 +308,13 @@ def _run_loop(driver, args):
                     except Exception as e:
                         notify(f"Export failed: {e}")
                         print(f"❌ Export failed: {e}")
+                    last_keepalive = time.monotonic()
+                elif time.monotonic() - last_keepalive >= 30:
+                    try:
+                        driver.execute_script("return 1")
+                    except Exception:
+                        pass
+                    last_keepalive = time.monotonic()
                 time.sleep(0.5)
         except KeyboardInterrupt:
             pass
@@ -375,7 +383,20 @@ def main():
     finally:
         if os.path.exists(PID_FILE):
             os.remove(PID_FILE)
-        driver.quit()
+        chromedriver_pid = None
+        try:
+            chromedriver_pid = driver.service.process.pid
+        except Exception:
+            pass
+        try:
+            driver.quit()
+        except Exception:
+            pass
+        if platform.system() == "Windows" and chromedriver_pid:
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(chromedriver_pid)],
+                capture_output=True,
+            )
         notify(f"Session ended — {export_count} PNG(s) exported")
         print(f"\n✅ Done. Exported {export_count} PNG(s).")
 
