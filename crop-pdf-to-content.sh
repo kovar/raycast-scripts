@@ -10,7 +10,23 @@ export PATH="$HOME/.local/bin:$PATH"
 # @raycast.author kovar
 # @raycast.authorURL https://raycast.com/kovar
 
-file=$(osascript -e 'tell application "Finder" to POSIX path of (selection as alias)' 2>/dev/null)
-output="${file%.*}_cropped.pdf"
+files=$(osascript -e '
+tell application "Finder"
+  set sel to selection
+  set output to ""
+  repeat with f in sel
+    set output to output & POSIX path of (f as alias) & linefeed
+  end repeat
+  return output
+end tell' 2>/dev/null)
 
-uv tool run pdfcropmargins -p 3 "$file" -o "$output"
+if [ -z "$files" ]; then
+  echo "No files selected in Finder"
+  exit 1
+fi
+
+while IFS= read -r file; do
+  [[ -z "$file" || ( "$file" != *.pdf && "$file" != *.PDF ) ]] && continue
+  output="${file%.*}_cropped.pdf"
+  uv tool run pdfcropmargins -p 3 "$file" -o "$output"
+done <<< "$files"
