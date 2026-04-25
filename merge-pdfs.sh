@@ -43,4 +43,8 @@ while [ -e "$output" ]; do
   (( counter++ ))
 done
 
-pdfunite "${pdf_files[@]}" "$output"
+pages_args=()
+for f in "${pdf_files[@]}"; do
+  pages_args+=("$f" "1-z")
+done
+qpdf --empty --pages "${pages_args[@]}" -- "$output"
