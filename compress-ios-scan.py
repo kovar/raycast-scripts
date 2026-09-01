@@ -25,7 +25,7 @@ far worse than they need to, two independent ways:
 Usage:
     uv run compress-ios-scan.py INPUT.pdf [INPUT2.pdf ...] \
         --quality {lossless,hq,balanced,small,tiny} \
-        [--size WIDTHxHEIGHT]   # physical size in cm, e.g. 8.5x5.3
+        [--size SIZE]            # A4 / A4-landscape / ... or WIDTHxHEIGHT in centimetres, e.g. 8.5x5.3
         [--colors N] [--scale PCT]   # advanced: override the preset
         [--output PATH]              # default: <input>_compressed.pdf, never overwrites input
 
@@ -73,6 +73,20 @@ PRESETS = {
 }
 
 CM_TO_PT = 72 / 2.54
+
+# ISO 216 A-series, portrait then landscape, in centimetres.
+PAGE_SIZES_CM: dict[str, tuple[float, float]] = {
+    "a2": (42.0, 59.4),
+    "a2-landscape": (59.4, 42.0),
+    "a3": (29.7, 42.0),
+    "a3-landscape": (42.0, 29.7),
+    "a4": (21.0, 29.7),
+    "a4-landscape": (29.7, 21.0),
+    "a5": (14.8, 21.0),
+    "a5-landscape": (21.0, 14.8),
+    "a6": (10.5, 14.8),
+    "a6-landscape": (14.8, 10.5),
+}
 
 
 def find_oxipng() -> str | None:
@@ -228,15 +242,22 @@ def compress_pdf(
     print(f"{src.name}: {total_before/1024:.1f} KB -> {dst.name}: {total_after/1024:.1f} KB "
           f"({pct:.1f}% smaller)")
     if size_cm is not None:
-        print(f"  page fixed to {size_cm[0]}x{size_cm[1]}cm")
+        print(f"  page fixed to {size_cm[0]:g} x {size_cm[1]:g} cm")
 
 
 def parse_size(s: str) -> tuple[float, float]:
+    raw = s.strip().lower().replace("cm", "").replace(" ", "").replace("_", "-").replace("×", "x")
+    if raw in PAGE_SIZES_CM:
+        return PAGE_SIZES_CM[raw]
     try:
-        w, h = s.lower().replace("cm", "").split("x")
+        w, h = raw.split("x")
         return float(w), float(h)
     except Exception as e:
-        raise argparse.ArgumentTypeError(f"expected WIDTHxHEIGHT in cm, e.g. 8.5x5.3, got {s!r}") from e
+        named = ", ".join(PAGE_SIZES_CM)
+        raise argparse.ArgumentTypeError(
+            f"expected a European page size ({named}) or WIDTHxHEIGHT in centimetres, "
+            f"e.g. 8.5x5.3, got {s!r}"
+        ) from e
 
 
 def main() -> int:
@@ -244,7 +265,8 @@ def main() -> int:
     ap.add_argument("inputs", nargs="+", type=Path)
     ap.add_argument("--quality", choices=list(PRESETS), default="small")
     ap.add_argument("--size", type=parse_size, default=None,
-                     help="physical page size in cm as WIDTHxHEIGHT, e.g. 8.5x5.3")
+                     help="physical page size: ISO A-series name (A4, A4-landscape, ...) "
+                          "or WIDTHxHEIGHT in centimetres, e.g. 8.5x5.3")
     ap.add_argument("--colors", type=int, default=None, help="override preset color count")
     ap.add_argument("--scale", type=float, default=None, help="override preset resolution scale (0-1)")
     ap.add_argument("--output-dir", type=Path, default=None,
