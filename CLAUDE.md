@@ -28,7 +28,9 @@ Three Raycast commands per platform: Start Session, Export Now, Stop Session.
    the duration of the export (no re-layout, just sharper canvases)
 3. Enter kiosk mode (`kiosk` + `hideLogo` URL params) **without reloading** (see below)
 4. Inject CSS (`<style id=EXPORT_STYLE_ID>`): hide refresh picker, dashboard tab bar, panel "⋮"
-   menu; fix print-mode time picker. **The style element is removed after the export** — with the
+   menu, panel resize handles (`.scene-resize-handle`), the "Add variable" (+) button
+   (`.dashboard-canvas-add-button`; its row too when it holds nothing else, so variables stay);
+   fix print-mode time picker. **The style element is removed after the export** — with the
    in-place kiosk there is no reload, so it would otherwise stay in the user's live view.
 5. `Page.printToPDF` (CDP) on a single page as tall as the content → PDF file
 6. `pdftoppm -r 300 -png -singlefile -x 0 -y 0 -W 6000 -H 3375` crops the visible frame → PNG

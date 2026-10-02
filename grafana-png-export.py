@@ -385,6 +385,14 @@ def do_export(driver, output_dir: str, dpr: int = 4) -> str:
                 div:has(> [role="tablist"] [data-tab-activation-key]) { display: none !important; }
                 /* Panel "⋮" menu, which appears on whichever panel the mouse is over */
                 [data-testid^="data-testid Panel menu "] { visibility: hidden !important; }
+                /* Panel resize handles (bottom-right corner marks) */
+                .scene-resize-handle, .react-resizable-handle { display: none !important; }
+                /* "Add variable" (+) button; its row is hidden too when it holds nothing else,
+                   so dashboards with variables keep them */
+                .dashboard-canvas-add-button { display: none !important; }
+                [data-testid="dashboard controls"] > div:has(> .dashboard-canvas-add-button:only-child) {
+                    display: none !important;
+                }
                 @media print {
                     [data-testid="data-testid TimePicker Open Button"] > div { display: block !important; }
                 }
