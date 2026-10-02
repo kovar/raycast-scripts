@@ -173,6 +173,16 @@ empty, the export adds the browser zone via a CSS `::after` rule in the export s
 removed with it): the `en-GB` short name (e.g. CEST/CET, else "GMT+x") at the range's start date.
 The browser zone is the system zone via `Emulation.setTimezoneOverride`.
 
+### Thin Grid Lines (hairline patch)
+Grafana's uPlot config draws grid lines, ticks and axis borders `1 / devicePixelRatio` wide (one
+physical px; `UPlotAxisBuilder.ts`). At the export's DPR 4 that prints at ~1 PNG px — nearly
+invisible. During the export `CanvasRenderingContext2D.prototype.stroke` is wrapped
+(`_HAIRLINE_PATCH_JS`): strokes <= 1 device px are drawn `devicePixelRatio` wide, i.e. 1 CSS px as on
+a 1x screen; series lines (>= 1 CSS px = >= DPR device px) are untouched. It's installed *before*
+the DPR override (charts redraw on DPR change), also via `Page.addScriptToEvaluateOnNewDocument`
+for the reload fallback, and removed *before* the override is cleared, so the live view redraws
+with Grafana's normal hairlines.
+
 ### @media print CSS Fix
 Grafana's CSS-in-JS hides the time picker label in print mode. Fixed by injecting:
 ```css

@@ -326,6 +326,31 @@ MAX_PAPER_HEIGHT = 15000  # CSS px; only needs to hold whatever overlaps the vis
 
 EXPORT_STYLE_ID = "grafana-png-export-style"
 
+# Grafana draws grid lines, ticks and axis borders 1 / devicePixelRatio wide: one physical
+# pixel. At the export's raised pixel ratio that is a fraction of a page pixel and prints
+# nearly invisible. While exporting, canvas strokes <= 1 device px are drawn devicePixelRatio
+# wide instead (1 CSS px, as on a 1x screen); series lines are wider and untouched.
+_HAIRLINE_PATCH_JS = """
+(() => {
+    const proto = CanvasRenderingContext2D.prototype;
+    if (proto.__gpeOrigStroke) return;
+    const orig = proto.stroke;
+    proto.__gpeOrigStroke = orig;
+    proto.stroke = function (...args) {
+        if (devicePixelRatio > 1 && this.lineWidth <= 1) {
+            const width = this.lineWidth;
+            this.lineWidth = devicePixelRatio;
+            try { return orig.apply(this, args); } finally { this.lineWidth = width; }
+        }
+        return orig.apply(this, args);
+    };
+})();
+"""
+_HAIRLINE_UNPATCH_JS = """
+const proto = CanvasRenderingContext2D.prototype;
+if (proto.__gpeOrigStroke) { proto.stroke = proto.__gpeOrigStroke; delete proto.__gpeOrigStroke; }
+"""
+
 _HEADER_COUNT_JS = "return document.querySelectorAll('header').length"
 
 
@@ -365,11 +390,17 @@ def do_export(driver, output_dir: str, dpr: int = 4, viewport=EXPORT_VIEWPORT) -
     kiosk_mode = None  # None | "in-place" | "reload"
     width, height = viewport
     metrics = {"width": width, "height": height, "deviceScaleFactor": dpr, "mobile": False}
+    hairline_script_id = None
 
     try:
         # Undo any manual resize, so the export matches the window
         if not fit_window_to_viewport(driver, viewport):
             notify(f"Window can't fit a {width}x{height} page on this screen - export won't match what you see")
+        # Thicken hairlines before the pixel ratio changes (charts redraw on that change);
+        # also for a new document, in case kiosk falls back to a reload.
+        driver.execute_script(_HAIRLINE_PATCH_JS)
+        hairline_script_id = driver.execute_cdp_cmd(
+            "Page.addScriptToEvaluateOnNewDocument", {"source": _HAIRLINE_PATCH_JS})["identifier"]
         # Same size as the window (no re-layout); only raises the pixel ratio for sharp canvases.
         driver.execute_cdp_cmd("Emulation.setDeviceMetricsOverride", metrics)
         missing = _missing_export_params(original_url)
@@ -486,6 +517,11 @@ def do_export(driver, output_dir: str, dpr: int = 4, viewport=EXPORT_VIEWPORT) -
 
         return prefix + ".png"
     finally:
+        if hairline_script_id:
+            try:
+                driver.execute_cdp_cmd("Page.removeScriptToEvaluateOnNewDocument", {"identifier": hairline_script_id})
+            except Exception as e:
+                print(f"⚠️  Could not remove hairline script: {e}")
         # Without a reload the injected CSS would otherwise stay in the user's view
         try:
             driver.execute_script("document.getElementById(arguments[0])?.remove()", EXPORT_STYLE_ID)
@@ -498,6 +534,10 @@ def do_export(driver, output_dir: str, dpr: int = 4, viewport=EXPORT_VIEWPORT) -
                 driver.get(original_url)
         except Exception as e:
             print(f"⚠️  Could not restore original URL: {e}")
+        try:  # before the pixel ratio drops back, so charts redraw with normal hairlines
+            driver.execute_script(_HAIRLINE_UNPATCH_JS)
+        except Exception as e:
+            print(f"⚠️  Could not restore canvas stroke: {e}")
         try:
             driver.execute_cdp_cmd("Emulation.clearDeviceMetricsOverride", {})
         except Exception as e:
