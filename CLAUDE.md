@@ -35,6 +35,10 @@ Three Raycast commands per platform: Start Session, Export Now, Stop Session.
    menu, panel resize handles (`.scene-resize-handle`), the "Add variable" (+) button
    (`.dashboard-canvas-add-button`; its row too when it holds nothing else, so variables stay);
    fix print-mode time picker; show the timezone in the time picker label (see below).
+   Scrollbars are hidden (`scrollbar-width: none`), so a dashboard slightly taller than the frame
+   doesn't leave an empty gutter at the right; panels widen into it and charts redraw. The refresh
+   picker's emptied button group and empty controls rows are hidden too — each would still add an
+   8 px flex gap, leaving the time picker short of the panels' right edge.
    Then `_TIGHTEN_CONTROLS_JS` measures the gap between the controls (time picker/variables) and
    the first panel (~30 px of stacked paddings around the hidden tab bar's slot) and clips the empty
    bottom of the controls' wrapper so it equals the gap between panels. Pulling the dashboard body

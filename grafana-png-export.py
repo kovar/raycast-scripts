@@ -499,10 +499,18 @@ def do_export(driver, output_dir: str, dpr: int = 4, viewport=EXPORT_VIEWPORT) -
             style.textContent = tzRule + pickerRule + `
                 [data-testid="data-testid RefreshPicker run button"],
                 [data-testid="data-testid RefreshPicker interval button"] { display: none !important; }
+                /* Their (then empty) button group and empty controls rows would each still add a
+                   flex gap, pushing the time picker left of the panels' right edge */
+                .button-group:has(> [data-testid="data-testid RefreshPicker run button"]),
+                [data-testid="data-testid dashboard controls"] div:empty { display: none !important; }
                 /* Time range shift (< >) and zoom-out buttons around the time picker */
                 [data-testid="data-testid explore-toolbar-timepicker-move-backward-button"],
                 [data-testid="data-testid explore-toolbar-timepicker-move-forward-button"],
                 [data-testid="data-testid explore-toolbar-timepicker-zoom-out-button"] { display: none !important; }
+                /* Scrollbars: content cut at the fold would otherwise leave an empty scrollbar
+                   gutter at the right edge; panels widen into it */
+                * { scrollbar-width: none !important; scrollbar-gutter: auto !important; }
+                *::-webkit-scrollbar { display: none !important; }
                 /* Dashboard tab bar (grouped dashboards); the active tab's panels are still shown */
                 div:has(> [role="tablist"] [data-tab-activation-key]) { display: none !important; }
                 /* Panel "⋮" menu, which appears on whichever panel the mouse is over */
