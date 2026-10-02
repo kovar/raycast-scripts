@@ -29,7 +29,9 @@ Three Raycast commands per platform: Start Session, Export Now, Stop Session.
    ratio to `--dpr` (default 4) via `setDeviceMetricsOverride` at the same size, only for
    the duration of the export (no re-layout, just sharper canvases)
 3. Enter kiosk mode (`kiosk` + `hideLogo` URL params) **without reloading** (see below)
-4. Inject CSS (`<style id=EXPORT_STYLE_ID>`): hide refresh picker, dashboard tab bar, panel "⋮"
+4. Inject CSS (`<style id=EXPORT_STYLE_ID>`): hide refresh picker, time shift `<` `>` and zoom-out
+   buttons (the time picker then gets the outer buttons' radius/border, read from the live page so
+   any theme works), dashboard tab bar, panel "⋮"
    menu, panel resize handles (`.scene-resize-handle`), the "Add variable" (+) button
    (`.dashboard-canvas-add-button`; its row too when it holds nothing else, so variables stay);
    fix print-mode time picker; show the timezone in the time picker label (see below).

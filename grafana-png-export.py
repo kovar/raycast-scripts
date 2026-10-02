@@ -413,11 +413,25 @@ def do_export(driver, output_dir: str, dpr: int = 4, viewport=EXPORT_VIEWPORT) -
                 if (zone) tzRule = `${picker} > span:last-child:empty::after { content: "${zone}"; }`;
             }
 
+            // With the < > and zoom-out buttons hidden, the time picker is alone in its button
+            // group: give it the outer buttons' corners and border (read live, so any theme works).
+            let pickerRule = '';
+            const back = document.querySelector('[data-testid="data-testid explore-toolbar-timepicker-move-backward-button"]');
+            if (back) {
+                const cs = getComputedStyle(back);
+                pickerRule = `[data-testid="data-testid TimePicker Open Button"] {
+                    border-radius: ${cs.borderTopLeftRadius} !important; border: ${cs.borderLeft} !important; }`;
+            }
+
             const style = document.createElement('style');
             style.id = arguments[0];
-            style.textContent = tzRule + `
+            style.textContent = tzRule + pickerRule + `
                 [data-testid="data-testid RefreshPicker run button"],
                 [data-testid="data-testid RefreshPicker interval button"] { display: none !important; }
+                /* Time range shift (< >) and zoom-out buttons around the time picker */
+                [data-testid="data-testid explore-toolbar-timepicker-move-backward-button"],
+                [data-testid="data-testid explore-toolbar-timepicker-move-forward-button"],
+                [data-testid="data-testid explore-toolbar-timepicker-zoom-out-button"] { display: none !important; }
                 /* Dashboard tab bar (grouped dashboards); the active tab's panels are still shown */
                 div:has(> [role="tablist"] [data-tab-activation-key]) { display: none !important; }
                 /* Panel "⋮" menu, which appears on whichever panel the mouse is over */
