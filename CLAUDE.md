@@ -8,6 +8,8 @@ Three Raycast commands per platform: Start Session, Export Now, Stop Session.
 ```
 ~/raycast/scripts/
   grafana-png-export.py      # Shared Python script (both platforms)
+  dev/
+    export-live.py           # Dev tool: run current export code against the live session
   macos/
     start-session.sh
     export-now.sh
@@ -99,6 +101,17 @@ with user's regular browser instance.
 - **Windows**: `uv`, `winget install oschwartz10612.Poppler`
   - Poppler installs to `%LOCALAPPDATA%\Programs\poppler-*\Library\bin\` (not on PATH)
   - Code globs for it in `_find_pdftoppm()`
+
+## Testing Against Real Grafana
+`uv run dev/export-live.py [--format <same as session>]` attaches to the running session's browser (port from
+`{browser}-profile/DevToolsActivePort`), loads the *current* `grafana-png-export.py` from disk,
+and exports the open tab to `~/.grafana-png-exporter/dev-exports/` — no session restart, no
+clipboard, no notifications. Use it to verify any change to the export before claiming it works.
+- A running session keeps the code it started with: after editing the script, the user must
+  restart the session (Stop + Start) to pick up changes.
+- CDP emulation overrides are per connection, so the dev tool re-applies
+  `apply_session_settings()`; they are dropped when it disconnects.
+- Only stop the dev tool's chromedriver (`driver.service.stop()`), never `driver.quit()`.
 
 ## Known Issues & Decisions
 
