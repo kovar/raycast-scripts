@@ -351,6 +351,46 @@ const proto = CanvasRenderingContext2D.prototype;
 if (proto.__gpeOrigStroke) { proto.stroke = proto.__gpeOrigStroke; delete proto.__gpeOrigStroke; }
 """
 
+# Kiosk leaves ~30 CSS px between the time picker row and the first panel (stacked paddings
+# around the hidden tab bar's slot). Measured after the export style is in, the empty bottom of
+# the controls' wrapper is clipped so that gap equals the gap between panels. (Pulling the body
+# up instead doesn't work: the sticky, opaque controls wrapper paints over the first panel.)
+# Appended to the export style.
+_TIGHTEN_CONTROLS_JS = """
+const style = document.getElementById(arguments[0]);
+const controls = document.querySelector('[data-testid="data-testid dashboard controls"]');
+const wrapper = controls?.parentElement;
+const body = document.querySelector('[data-testid="data-testid DashboardEditPaneSplitter primary body"]');
+if (!style || !wrapper || !body || wrapper.contains(body)) return null;
+const visible = r => r.width > 0 && r.height > 0;
+// Bottom of the controls' visible content (time picker, variables), excluding their padding
+const leaves = [...controls.querySelectorAll('button, input, label, [role], *:not(:has(*))')]
+    .map(e => e.getBoundingClientRect()).filter(visible);
+const panels = [...body.querySelectorAll('[data-viz-panel-key]')]
+    .map(e => e.getBoundingClientRect()).filter(visible);
+if (!leaves.length || !panels.length) return null;
+const controlsBottom = Math.max(...leaves.map(r => r.bottom));
+const panelTop = Math.min(...panels.map(r => r.top));
+// Gap between vertically adjacent panels (Grafana's grid margin, 8 px by default)
+let panelGap = 8;
+const gaps = [];
+for (const a of panels) for (const b of panels) {
+    const g = b.top - a.bottom;
+    if (g > 0 && b.left < a.right && a.left < b.right) gaps.push(g);
+}
+if (gaps.length) panelGap = Math.min(...gaps);
+const box = wrapper.getBoundingClientRect();
+// Never clip into the controls' content
+const excess = Math.min(Math.round(panelTop - controlsBottom - panelGap), Math.floor(box.bottom - controlsBottom));
+if (excess <= 0) return 0;
+const h = Math.round(box.height - excess);
+style.textContent += `
+    div:has(> [data-testid="data-testid dashboard controls"]) {
+        height: ${h}px !important; min-height: ${h}px !important; max-height: ${h}px !important;
+        overflow: hidden !important; }`;
+return excess;
+"""
+
 _HEADER_COUNT_JS = "return document.querySelectorAll('header').length"
 
 
@@ -472,7 +512,7 @@ def do_export(driver, output_dir: str, dpr: int = 4, viewport=EXPORT_VIEWPORT) -
                 /* "Add variable" (+) button; its row is hidden too when it holds nothing else,
                    so dashboards with variables keep them */
                 .dashboard-canvas-add-button { display: none !important; }
-                [data-testid="dashboard controls"] > div:has(> .dashboard-canvas-add-button:only-child) {
+                [data-testid="data-testid dashboard controls"] > div:has(> .dashboard-canvas-add-button:only-child) {
                     display: none !important;
                 }
                 @media print {
@@ -482,6 +522,10 @@ def do_export(driver, output_dir: str, dpr: int = 4, viewport=EXPORT_VIEWPORT) -
             document.head.appendChild(style);
         """, EXPORT_STYLE_ID)
         time.sleep(1)
+        tightened = driver.execute_script(_TIGHTEN_CONTROLS_JS, EXPORT_STYLE_ID)
+        print(f"ℹ️  Gap below time picker reduced by {tightened} px" if tightened
+              else f"ℹ️  Gap below time picker unchanged ({tightened})")
+        time.sleep(0.5)
 
         # Print on one page tall enough for all content, then crop the visible frame in
         # pdftoppm. (A viewport-sized page doesn't work: Chrome won't split a canvas across

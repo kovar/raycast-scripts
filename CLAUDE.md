@@ -35,6 +35,11 @@ Three Raycast commands per platform: Start Session, Export Now, Stop Session.
    menu, panel resize handles (`.scene-resize-handle`), the "Add variable" (+) button
    (`.dashboard-canvas-add-button`; its row too when it holds nothing else, so variables stay);
    fix print-mode time picker; show the timezone in the time picker label (see below).
+   Then `_TIGHTEN_CONTROLS_JS` measures the gap between the controls (time picker/variables) and
+   the first panel (~30 px of stacked paddings around the hidden tab bar's slot) and clips the empty
+   bottom of the controls' wrapper so it equals the gap between panels. Pulling the dashboard body
+   up with a negative margin doesn't work: the sticky, opaque controls wrapper covers the first panel.
+   Note the controls' test id is literally `data-testid="data-testid dashboard controls"`.
    **The style element is removed after the export** — with the
    in-place kiosk there is no reload, so it would otherwise stay in the user's live view.
 5. `Page.printToPDF` (CDP) on a single page as tall as the content → PDF file
