@@ -2,54 +2,69 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#   "selenium>=4.20"
+#   "selenium>=4.20",
+#   "tzlocal>=5.0",
 # ]
 # ///
 
 import sys
 import time
 import os
+import re
 import base64
 import platform
 import argparse
-import socket
+import shutil
 import signal
 import subprocess
+import tempfile
 import threading
 import glob
+from urllib.parse import urlsplit, urlunsplit, parse_qs, unquote
 
+# Line buffering so session.log updates live (stdout is redirected to a file by the launchers).
+# On Windows also force UTF-8 — the cp1252 default can't encode emoji in log output.
 if sys.platform == "win32":
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
+else:
+    sys.stdout.reconfigure(line_buffering=True)
+    sys.stderr.reconfigure(line_buffering=True)
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
+from selenium.common.exceptions import TimeoutException
+from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 
-REMOTE_DEBUG_PORT = 9222
+SYSTEM = platform.system()  # "Darwin" | "Windows" | "Linux"
 DATA_DIR = os.path.expanduser("~/.grafana-png-exporter")
 PID_FILE = os.path.join(DATA_DIR, "session.pid")
 EXPORT_TRIGGER = os.path.join(DATA_DIR, "export.trigger")
 STOP_TRIGGER = os.path.join(DATA_DIR, "stop.trigger")
 
+KEEPALIVE_INTERVAL = 15  # seconds
+KEEPALIVE_MAX_FAILURES = 3
+PANEL_LOADING_SELECTOR = '[aria-label="Panel loading bar"], .panel-loading'
+_NO_WINDOW = subprocess.CREATE_NO_WINDOW if SYSTEM == "Windows" else 0
+
+# The browser window is sized so the page area is exactly this (CSS px), and the export
+# captures exactly this frame: what you see is what you export, always 16:9.
+EXPORT_VIEWPORT = (1920, 1080)
+PNG_DPI = 300  # 1920×1080 CSS px → 6000×3375 PNG
+
 
 def platform_default_browser():
-    system = platform.system().lower()
-    if system == "darwin":
-        return "brave"
-    elif system == "windows":
-        return "brave"
-    return "chrome"
+    return "brave" if SYSTEM in ("Darwin", "Windows") else "chrome"
 
 
 def get_browser_config(browser_name: str):
     automation_profile = os.path.join(DATA_DIR, f"{browser_name}-profile")
     os.makedirs(automation_profile, exist_ok=True)
 
-    system = platform.system().lower()
     if browser_name == "brave":
-        if system == "darwin":
+        if SYSTEM == "Darwin":
             binary = "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"
         else:
             candidates = [
@@ -61,7 +76,7 @@ def get_browser_config(browser_name: str):
         return binary, automation_profile
 
     elif browser_name == "edge":
-        binary = "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge" if system == "darwin" \
+        binary = "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge" if SYSTEM == "Darwin" \
             else r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
         return binary, automation_profile
 
@@ -69,245 +84,117 @@ def get_browser_config(browser_name: str):
         return None, automation_profile
 
 
-_WINDOWS_TO_IANA = {
-    "AUS Central Standard Time": "Australia/Darwin",
-    "AUS Eastern Standard Time": "Australia/Sydney",
-    "Afghanistan Standard Time": "Asia/Kabul",
-    "Alaskan Standard Time": "America/Anchorage",
-    "Arab Standard Time": "Asia/Riyadh",
-    "Arabian Standard Time": "Asia/Dubai",
-    "Arabic Standard Time": "Asia/Baghdad",
-    "Argentina Standard Time": "America/Argentina/Buenos_Aires",
-    "Atlantic Standard Time": "America/Halifax",
-    "Azerbaijan Standard Time": "Asia/Baku",
-    "Azores Standard Time": "Atlantic/Azores",
-    "Canada Central Standard Time": "America/Regina",
-    "Cape Verde Standard Time": "Atlantic/Cape_Verde",
-    "Caucasus Standard Time": "Asia/Yerevan",
-    "Cen. Australia Standard Time": "Australia/Adelaide",
-    "Central America Standard Time": "America/Guatemala",
-    "Central Asia Standard Time": "Asia/Almaty",
-    "Central Brazilian Standard Time": "America/Cuiaba",
-    "Central Europe Standard Time": "Europe/Budapest",
-    "Central European Standard Time": "Europe/Warsaw",
-    "Central Pacific Standard Time": "Pacific/Guadalcanal",
-    "Central Standard Time": "America/Chicago",
-    "Central Standard Time (Mexico)": "America/Mexico_City",
-    "China Standard Time": "Asia/Shanghai",
-    "Dateline Standard Time": "Etc/GMT+12",
-    "E. Africa Standard Time": "Africa/Nairobi",
-    "E. Australia Standard Time": "Australia/Brisbane",
-    "E. Europe Standard Time": "Asia/Nicosia",
-    "E. South America Standard Time": "America/Sao_Paulo",
-    "Eastern Standard Time": "America/New_York",
-    "Eastern Standard Time (Mexico)": "America/Cancun",
-    "Egypt Standard Time": "Africa/Cairo",
-    "Ekaterinburg Standard Time": "Asia/Yekaterinburg",
-    "FLE Standard Time": "Europe/Kiev",
-    "Fiji Standard Time": "Pacific/Fiji",
-    "GMT Standard Time": "Europe/London",
-    "GTB Standard Time": "Europe/Bucharest",
-    "Georgian Standard Time": "Asia/Tbilisi",
-    "Greenland Standard Time": "America/Godthab",
-    "Greenwich Standard Time": "Atlantic/Reykjavik",
-    "Hawaiian Standard Time": "Pacific/Honolulu",
-    "India Standard Time": "Asia/Calcutta",
-    "Iran Standard Time": "Asia/Tehran",
-    "Israel Standard Time": "Asia/Jerusalem",
-    "Jordan Standard Time": "Asia/Amman",
-    "Korea Standard Time": "Asia/Seoul",
-    "Libya Standard Time": "Africa/Tripoli",
-    "Line Islands Standard Time": "Pacific/Kiritimati",
-    "Magadan Standard Time": "Asia/Magadan",
-    "Mauritius Standard Time": "Indian/Mauritius",
-    "Middle East Standard Time": "Asia/Beirut",
-    "Montevideo Standard Time": "America/Montevideo",
-    "Morocco Standard Time": "Africa/Casablanca",
-    "Mountain Standard Time": "America/Denver",
-    "Mountain Standard Time (Mexico)": "America/Chihuahua",
-    "Myanmar Standard Time": "Asia/Rangoon",
-    "N. Central Asia Standard Time": "Asia/Novosibirsk",
-    "Namibia Standard Time": "Africa/Windhoek",
-    "Nepal Standard Time": "Asia/Katmandu",
-    "New Zealand Standard Time": "Pacific/Auckland",
-    "Newfoundland Standard Time": "America/St_Johns",
-    "North Asia East Standard Time": "Asia/Irkutsk",
-    "North Asia Standard Time": "Asia/Krasnoyarsk",
-    "Pacific SA Standard Time": "America/Santiago",
-    "Pacific Standard Time": "America/Los_Angeles",
-    "Pacific Standard Time (Mexico)": "America/Santa_Isabel",
-    "Pakistan Standard Time": "Asia/Karachi",
-    "Paraguay Standard Time": "America/Asuncion",
-    "Romance Standard Time": "Europe/Paris",
-    "Russia Time Zone 11": "Asia/Kamchatka",
-    "Russia Time Zone 3": "Europe/Samara",
-    "Russia Time Zone 9": "Asia/Yakutsk",
-    "Russian Standard Time": "Europe/Moscow",
-    "SA Eastern Standard Time": "America/Cayenne",
-    "SA Pacific Standard Time": "America/Bogota",
-    "SA Western Standard Time": "America/La_Paz",
-    "SE Asia Standard Time": "Asia/Bangkok",
-    "Samoa Standard Time": "Pacific/Apia",
-    "Singapore Standard Time": "Asia/Singapore",
-    "South Africa Standard Time": "Africa/Johannesburg",
-    "Sri Lanka Standard Time": "Asia/Colombo",
-    "Syria Standard Time": "Asia/Damascus",
-    "Taipei Standard Time": "Asia/Taipei",
-    "Tasmania Standard Time": "Australia/Hobart",
-    "Tokyo Standard Time": "Asia/Tokyo",
-    "Tonga Standard Time": "Pacific/Tongatapu",
-    "Turkey Standard Time": "Europe/Istanbul",
-    "US Eastern Standard Time": "America/Indiana/Indianapolis",
-    "US Mountain Standard Time": "America/Phoenix",
-    "UTC": "Etc/UTC",
-    "UTC+12": "Etc/GMT-12",
-    "UTC-02": "Etc/GMT+2",
-    "UTC-11": "Etc/GMT+11",
-    "Ulaanbaatar Standard Time": "Asia/Ulaanbaatar",
-    "Venezuela Standard Time": "America/Caracas",
-    "Vladivostok Standard Time": "Asia/Vladivostok",
-    "W. Australia Standard Time": "Australia/Perth",
-    "W. Central Africa Standard Time": "Africa/Lagos",
-    "W. Europe Standard Time": "Europe/Berlin",
-    "West Asia Standard Time": "Asia/Tashkent",
-    "West Pacific Standard Time": "Pacific/Port_Moresby",
-    "Yakutsk Standard Time": "Asia/Yakutsk",
-}
-
-
 def get_system_timezone() -> str | None:
     """Return the local IANA timezone ID (e.g. 'Europe/Berlin'), or None if unavailable."""
-    if platform.system() == "darwin":
-        try:
-            result = subprocess.run(["readlink", "/etc/localtime"], capture_output=True, text=True)
-            tz = result.stdout.strip()
-            if "zoneinfo/" in tz:
-                return tz.split("zoneinfo/")[-1]
-        except Exception:
-            pass
-    elif platform.system() == "Windows":
-        try:
-            result = subprocess.run(["tzutil", "/g"], capture_output=True, text=True)
-            win_tz = result.stdout.strip()
-            iana = _WINDOWS_TO_IANA.get(win_tz)
-            if not iana:
-                print(f"⚠️  Unknown Windows timezone '{win_tz}', skipping timezone override")
-            return iana
-        except Exception:
-            pass
-    return None
-
-
-def is_debug_port_open(port=REMOTE_DEBUG_PORT):
     try:
-        with socket.create_connection(("localhost", port), timeout=1):
-            return True
-    except OSError:
-        return False
+        from tzlocal import get_localzone_name
+        return get_localzone_name()
+    except Exception as e:
+        print(f"⚠️  Could not determine system timezone ({e}), skipping timezone override")
+        return None
 
 
-def apply_session_settings(driver, dpr: int = 4):
+def apply_session_settings(driver):
+    """Session-wide settings (per CDP connection)."""
     tz = get_system_timezone()
     if tz:
-        driver.execute_cdp_cmd("Emulation.setTimezoneOverride", {"timezoneId": tz})
-        print(f"✅ Timezone: {tz}")
-
-    driver.execute_cdp_cmd("Emulation.setDeviceMetricsOverride", {
-        "width": 1920,
-        "height": 1080,
-        "deviceScaleFactor": dpr,
-        "mobile": False,
-    })
-    print(f"✅ Device pixel ratio: {dpr}x")
-
-
-def create_driver(browser_name: str, user_data_dir: str = None, dpr: int = 4):
-    binary, automation_profile = get_browser_config(browser_name)
-
-    def base_options():
-        opts = Options()
-        if binary:
-            opts.binary_location = binary
-        opts.add_argument("--disable-blink-features=AutomationControlled")
-        opts.add_argument("--disable-background-timer-throttling")
-        opts.add_argument("--disable-renderer-backgrounding")
-        opts.add_argument("--disable-backgrounding-occluded-windows")
-        return opts
-
-    if is_debug_port_open():
-        opts = base_options()
-        opts.debugger_address = f"localhost:{REMOTE_DEBUG_PORT}"
         try:
-            driver = webdriver.Chrome(options=opts)
-            print(f"✅ Connected to existing {browser_name.capitalize()} window (port {REMOTE_DEBUG_PORT})")
-            apply_session_settings(driver, dpr)
-            return driver
-        except Exception:
-            pass
+            driver.execute_cdp_cmd("Emulation.setTimezoneOverride", {"timezoneId": tz})
+            print(f"✅ Timezone: {tz}")
+        except Exception as e:
+            print(f"⚠️  Timezone override '{tz}' rejected: {e}")
 
+
+def create_driver(browser_name: str, user_data_dir: str = None):
+    binary, automation_profile = get_browser_config(browser_name)
     profile_dir = user_data_dir or automation_profile
-    opts = base_options()
+
+    opts = Options()
+    if binary:
+        opts.binary_location = binary
     opts.add_argument(f"--user-data-dir={profile_dir}")
+    opts.add_argument("--disable-blink-features=AutomationControlled")
+    opts.add_argument("--disable-background-timer-throttling")
+    opts.add_argument("--disable-renderer-backgrounding")
+    opts.add_argument("--disable-backgrounding-occluded-windows")
+
     driver = webdriver.Chrome(options=opts)
     print(f"✅ Launched {browser_name.capitalize()} (automation profile: {profile_dir})")
-    apply_session_settings(driver, dpr)
+    apply_session_settings(driver)
+    fit_window_to_viewport(driver)
     return driver
 
 
 def notify(message: str):
-    if platform.system() == "darwin":
-        subprocess.run(
-            ["osascript", "-e", f'display notification "{message}" with title "Grafana Exporter"'],
-            capture_output=True,
-        )
-    elif platform.system() == "Windows":
-        subprocess.run(
-            ["powershell", "-Command",
-             f'Add-Type -AssemblyName System.Windows.Forms; '
-             f'$n = New-Object System.Windows.Forms.NotifyIcon; '
-             f'$n.Icon = [System.Drawing.SystemIcons]::Information; '
-             f'$n.Visible = $true; '
-             f'$n.ShowBalloonTip(5000, "Grafana Exporter", "{message}", 1); '
-             f'Start-Sleep -Milliseconds 500; $n.Dispose()'],
-            capture_output=True,
-        )
-
-
-def auto_login(driver, username: str, password: str):
-    print("🔑 Attempting auto-login...")
+    """Show a desktop notification without blocking. The message is passed as an
+    argument / env var, never interpolated into script source, so quotes are safe."""
+    message = " ".join(str(message).split())[:200]
     try:
-        WebDriverWait(driver, 8).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, 'input[type="password"]'))
-        )
-    except Exception:
-        print("⚠️  Login form not found (already logged in?)")
-        return
+        if SYSTEM == "Darwin":
+            subprocess.Popen(
+                ["osascript",
+                 "-e", "on run argv",
+                 "-e", 'display notification (item 1 of argv) with title "Grafana Exporter"',
+                 "-e", "end run",
+                 message],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+        elif SYSTEM == "Windows":
+            subprocess.Popen(
+                ["powershell", "-NoProfile", "-Command",
+                 'Add-Type -AssemblyName System.Windows.Forms; '
+                 '$n = New-Object System.Windows.Forms.NotifyIcon; '
+                 '$n.Icon = [System.Drawing.SystemIcons]::Information; '
+                 '$n.Visible = $true; '
+                 '$n.ShowBalloonTip(5000, "Grafana Exporter", $env:GPE_MESSAGE, 1); '
+                 'Start-Sleep -Milliseconds 500; $n.Dispose()'],
+                env={**os.environ, "GPE_MESSAGE": message},
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                creationflags=_NO_WINDOW,
+            )
+    except Exception as e:
+        print(f"⚠️  Notification failed: {e}")
 
-    for sel in ['input[name="user"]', 'input[name="username"]',
-                'input[placeholder*="email" i]', 'input[placeholder*="username" i]']:
-        try:
-            elem = driver.find_element(By.CSS_SELECTOR, sel)
-            elem.clear()
-            elem.send_keys(username)
-            break
-        except:
-            continue
 
-    driver.find_element(By.CSS_SELECTOR, 'input[type="password"]').send_keys(password)
-
-    for sel in ['button[type="submit"]', 'button[data-testid="login-button"]']:
-        try:
-            driver.find_element(By.CSS_SELECTOR, sel).click()
-            time.sleep(4)
-            print("✅ Login submitted")
-            return
-        except:
-            continue
-    print("⚠️  Could not submit login form")
+def copy_png_to_clipboard(png_path: str) -> bool:
+    """Put the PNG on the clipboard as an image (Windows: also as a file, for pasting into Explorer/Slack)."""
+    try:
+        if SYSTEM == "Darwin":
+            result = subprocess.run(
+                ["osascript",
+                 "-e", "on run argv",
+                 "-e", "set the clipboard to (read (POSIX file (item 1 of argv)) as «class PNGf»)",
+                 "-e", "end run",
+                 png_path],
+                capture_output=True, timeout=30,
+            )
+        elif SYSTEM == "Windows":
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-STA", "-Command",
+                 'Add-Type -AssemblyName System.Windows.Forms, System.Drawing; '
+                 '$img = [System.Drawing.Image]::FromFile($env:GPE_PNG); '
+                 '$data = New-Object System.Windows.Forms.DataObject; '
+                 '$data.SetImage($img); '
+                 '$files = New-Object System.Collections.Specialized.StringCollection; '
+                 '[void]$files.Add($env:GPE_PNG); '
+                 '$data.SetFileDropList($files); '
+                 '[System.Windows.Forms.Clipboard]::SetDataObject($data, $true); '
+                 '$img.Dispose()'],
+                env={**os.environ, "GPE_PNG": png_path},
+                capture_output=True, timeout=30, creationflags=_NO_WINDOW,
+            )
+        else:
+            return False
+    except Exception as e:
+        print(f"⚠️  Clipboard copy failed: {e}")
+        return False
+    if result.returncode != 0:
+        print(f"⚠️  Clipboard copy failed: {result.stderr.decode(errors='replace').strip()}")
+        return False
+    return True
 
 
 def _find_pdftoppm() -> str:
-    import shutil
     p = shutil.which("pdftoppm")
     if p:
         return p
@@ -321,156 +208,313 @@ def _find_pdftoppm() -> str:
         r"C:\Program Files\poppler-*\Library\bin\pdftoppm.exe",
         r"C:\ProgramData\scoop\apps\poppler\*\bin\pdftoppm.exe",
         os.path.expandvars(r"%LOCALAPPDATA%\Programs\poppler-*\Library\bin\pdftoppm.exe"),
+        os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WinGet\Packages\oschwartz10612.Poppler_*\poppler-*\Library\bin\pdftoppm.exe"),
     ]:
         candidates.extend(glob.glob(pattern))
     for c in candidates:
         if os.path.isfile(c):
             return c
-    if platform.system() == "Windows":
+    if SYSTEM == "Windows":
         raise RuntimeError("pdftoppm not found. Install poppler: winget install oschwartz10612.Poppler")
     raise RuntimeError("pdftoppm not found. Install poppler: brew install poppler")
 
 
-def do_export(driver, output_dir: str) -> str:
-    cur = driver.current_url
+def fit_window_to_viewport(driver, viewport=EXPORT_VIEWPORT) -> bool:
+    """Resize the browser window so the page area (innerWidth x innerHeight) matches
+    `viewport`. Window sizes are in device-independent px, so display scaling
+    (e.g. Windows 125%) is handled; window borders/toolbars are measured, not guessed."""
+    width, height = viewport
 
-    if "kiosk" not in cur:
-        kiosk_url = cur + ("&kiosk" if "?" in cur else "?kiosk")
-        driver.get(kiosk_url)
-        time.sleep(5)
+    def fits(inner_w, inner_h):  # fractional display scaling can leave a px or two off
+        return abs(inner_w - width) <= 2 and abs(inner_h - height) <= 2
 
-    # Wait for the time picker label to be populated (React renders it async)
+    for _ in range(4):
+        inner_w, inner_h = driver.execute_script("return [innerWidth, innerHeight]")
+        if fits(inner_w, inner_h):
+            return True
+        size = driver.get_window_size()
+        driver.set_window_size(size["width"] + width - inner_w, size["height"] + height - inner_h)
+        time.sleep(0.3)
+    inner_w, inner_h = driver.execute_script("return [innerWidth, innerHeight]")
+    if fits(inner_w, inner_h):
+        return True
+    print(f"⚠️  Could not size the page area to {width}×{height} (got {inner_w}×{inner_h}) - "
+          "screen too small? Exports still render at the target size, but won't match the window.")
+    return False
+
+
+# kiosk: hide Grafana chrome. hideLogo: hide the "Powered by Grafana" ribbon kiosk mode shows since 12.4.
+EXPORT_URL_PARAMS = ("kiosk", "hideLogo")
+
+
+def _missing_export_params(url: str) -> list[str]:
+    present = parse_qs(urlsplit(url).query, keep_blank_values=True)
+    return [p for p in EXPORT_URL_PARAMS if p not in present]
+
+
+def _with_params(url: str, params: list[str]) -> str:
+    parts = urlsplit(url)
+    query = "&".join([parts.query, *params] if parts.query else params)
+    return urlunsplit(parts._replace(query=query))
+
+
+def _wait_for_panels(driver, timeout: float = 30):
+    """Wait until no Grafana panel shows a loading indicator (slow queries)."""
+    start = time.monotonic()
+    seen = False
+    while time.monotonic() - start < timeout:
+        try:
+            loading = driver.find_elements(By.CSS_SELECTOR, PANEL_LOADING_SELECTOR)
+        except Exception:
+            return
+        if not loading:
+            break
+        seen = True
+        time.sleep(0.5)
+    else:
+        print(f"⚠️  Panels still loading after {timeout:.0f}s, exporting anyway")
+        return
+    if seen:
+        print(f"⏳ Waited {time.monotonic() - start:.1f}s for panels to finish loading")
+
+
+def _output_name(driver) -> str:
+    """'<dashboard title>_<timestamp>' from the page title ('Title - Dashboards - Grafana')."""
     try:
-        WebDriverWait(driver, 10).until(
-            lambda d: d.find_element(
-                By.CSS_SELECTOR, '[data-testid="data-testid TimePicker Open Button"]'
-            ).text.strip()
-        )
+        title = driver.title.split(" - ")[0]
     except Exception:
-        pass  # proceed even if selector doesn't match this Grafana version
+        title = ""
+    slug = re.sub(r"[^\w\- ]+", "", title).strip().replace(" ", "_")[:60] or "grafana_export"
+    return f"{slug}_{time.strftime('%Y%m%d_%H%M%S')}"
 
+
+# Full content height: Grafana (13+) scrolls an inner container rather than the
+# document, so document.scrollHeight alone misses the overflow.
+_CONTENT_HEIGHT_JS = """
+    let extra = document.documentElement.scrollHeight - innerHeight;
+    for (const e of document.querySelectorAll('*')) {
+        if (e.clientHeight < innerHeight / 2) continue;  // skip legends, small widgets
+        if (!/(auto|scroll)/.test(getComputedStyle(e).overflowY)) continue;
+        extra = Math.max(extra, e.scrollHeight - e.clientHeight);
+    }
+    return innerHeight + Math.max(0, Math.ceil(extra));
+"""
+MAX_PAPER_HEIGHT = 15000  # CSS px; only needs to hold whatever overlaps the visible frame
+
+EXPORT_STYLE_ID = "grafana-png-export-style"
+
+_HEADER_COUNT_JS = "return document.querySelectorAll('header').length"
+
+
+def _enter_kiosk_in_place(driver, url: str) -> bool:
+    """Switch to `url` (kiosk/hideLogo) via client-side navigation instead of a reload,
+    so unsaved view state - e.g. series hidden by clicking the legend - survives.
+    Returns False (with the URL change undone) if Grafana's chrome didn't react."""
+    if driver.execute_script(_HEADER_COUNT_JS) == 0:
+        return False  # can't tell whether kiosk took effect on this Grafana version
     driver.execute_script("""
-        const style = document.createElement('style');
-        style.textContent = `
-            [data-testid="data-testid RefreshPicker run button"],
-            [data-testid="data-testid RefreshPicker interval button"] { display: none !important; }
-            @media print {
-                [data-testid="data-testid TimePicker Open Button"] > div { display: block !important; }
-            }
-        `;
-        document.head.appendChild(style);
-    """)
+        history.pushState(history.state, '', arguments[0]);
+        dispatchEvent(new PopStateEvent('popstate', {state: history.state}));
+    """, url)
+    try:
+        WebDriverWait(driver, 3).until(lambda d: d.execute_script(_HEADER_COUNT_JS) == 0)
+        return True
+    except TimeoutException:
+        driver.execute_script("history.back()")
+        return False
+
+
+def _exit_kiosk_in_place(driver, original_url: str):
+    """Undo _enter_kiosk_in_place: restore the URL, then press Esc - Grafana only leaves
+    kiosk mode on Esc, not when the param disappears. Reload if anything is off."""
+    driver.execute_script("history.back()")
+    time.sleep(0.5)
+    ActionChains(driver).send_keys(Keys.ESCAPE).perform()
     time.sleep(1)
+    if unquote(driver.current_url) != unquote(original_url) or driver.execute_script(_HEADER_COUNT_JS) == 0:
+        print("⚠️  In-place kiosk exit incomplete, reloading original URL")
+        driver.get(original_url)
 
-    w = driver.execute_script("return document.documentElement.scrollWidth")
-    h = driver.execute_script("return document.documentElement.scrollHeight")
 
-    pdf_data = driver.execute_cdp_cmd("Page.printToPDF", {
-        "printBackground": True,
-        "paperWidth": w / 96,
-        "paperHeight": h / 96,
-        "marginTop": 0,
-        "marginBottom": 0,
-        "marginLeft": 0,
-        "marginRight": 0,
-        "scale": 1.0,
-    })
+def do_export(driver, output_dir: str, dpr: int = 4) -> str:
+    pdftoppm = _find_pdftoppm()  # fail fast, before touching the page
+    original_url = driver.current_url
+    kiosk_mode = None  # None | "in-place" | "reload"
+    width, height = EXPORT_VIEWPORT
+    metrics = {"width": width, "height": height, "deviceScaleFactor": dpr, "mobile": False}
 
-    os.makedirs(output_dir, exist_ok=True)
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
-    prefix = os.path.join(output_dir, f"grafana_export_{timestamp}")
-    pdf_path = prefix + ".pdf"
+    try:
+        # Undo any manual resize, so the export matches the window
+        if not fit_window_to_viewport(driver):
+            notify(f"Window can't fit a {width}x{height} page on this screen - export won't match what you see")
+        # Same size as the window (no re-layout); only raises the pixel ratio for sharp canvases.
+        driver.execute_cdp_cmd("Emulation.setDeviceMetricsOverride", metrics)
+        missing = _missing_export_params(original_url)
+        if missing:
+            export_url = _with_params(original_url, missing)
+            if _enter_kiosk_in_place(driver, export_url):
+                kiosk_mode = "in-place"
+                time.sleep(1)
+            else:
+                print("ℹ️  In-place kiosk not available, reloading (unsaved view changes are lost)")
+                driver.get(export_url)
+                kiosk_mode = "reload"
+                time.sleep(5)
+        else:
+            time.sleep(1)
 
-    with open(pdf_path, "wb") as f:
-        f.write(base64.b64decode(pdf_data["data"]))
+        _wait_for_panels(driver)
 
-    pdftoppm = _find_pdftoppm()
-    result = subprocess.run(
-        [pdftoppm, "-r", "300", "-png", "-singlefile", pdf_path, prefix],
-        capture_output=True,
-    )
-    os.remove(pdf_path)
-    if result.returncode != 0:
-        raise RuntimeError(f"pdftoppm failed: {result.stderr.decode()}")
+        # Wait for the time picker label to be populated (React renders it async)
+        try:
+            WebDriverWait(driver, 10).until(
+                lambda d: d.find_element(
+                    By.CSS_SELECTOR, '[data-testid="data-testid TimePicker Open Button"]'
+                ).text.strip()
+            )
+        except Exception:
+            pass  # proceed even if selector doesn't match this Grafana version
 
-    driver.get(cur)
-    time.sleep(2)
+        driver.execute_script("""
+            const style = document.createElement('style');
+            style.id = arguments[0];
+            style.textContent = `
+                [data-testid="data-testid RefreshPicker run button"],
+                [data-testid="data-testid RefreshPicker interval button"] { display: none !important; }
+                /* Dashboard tab bar (grouped dashboards); the active tab's panels are still shown */
+                div:has(> [role="tablist"] [data-tab-activation-key]) { display: none !important; }
+                /* Panel "⋮" menu, which appears on whichever panel the mouse is over */
+                [data-testid^="data-testid Panel menu "] { visibility: hidden !important; }
+                @media print {
+                    [data-testid="data-testid TimePicker Open Button"] > div { display: block !important; }
+                }
+            `;
+            document.head.appendChild(style);
+        """, EXPORT_STYLE_ID)
+        time.sleep(1)
 
-    return prefix + ".png"
+        # Print on one page tall enough for all content, then crop the visible frame in
+        # pdftoppm. (A viewport-sized page doesn't work: Chrome won't split a canvas across
+        # a page break, so a chart crossing the bottom edge moves to page 2 and prints blank.)
+        paper_height = min(driver.execute_script(_CONTENT_HEIGHT_JS), MAX_PAPER_HEIGHT)
+        pdf_data = driver.execute_cdp_cmd("Page.printToPDF", {
+            "printBackground": True,
+            "paperWidth": width / 96,
+            "paperHeight": paper_height / 96,
+            "marginTop": 0,
+            "marginBottom": 0,
+            "marginLeft": 0,
+            "marginRight": 0,
+            "scale": 1.0,
+        })
+
+        os.makedirs(output_dir, exist_ok=True)
+        prefix = os.path.join(output_dir, _output_name(driver))
+
+        with tempfile.TemporaryDirectory(prefix="grafana-export-") as tmp:
+            pdf_path = os.path.join(tmp, "export.pdf")
+            with open(pdf_path, "wb") as f:
+                f.write(base64.b64decode(pdf_data["data"]))
+            result = subprocess.run(
+                [pdftoppm, "-r", str(PNG_DPI), "-png", "-singlefile",
+                 "-x", "0", "-y", "0",
+                 "-W", str(round(width / 96 * PNG_DPI)), "-H", str(round(height / 96 * PNG_DPI)),
+                 pdf_path, prefix],
+                capture_output=True, creationflags=_NO_WINDOW,
+            )
+        if result.returncode != 0:
+            raise RuntimeError(f"pdftoppm failed: {result.stderr.decode(errors='replace')}")
+
+        return prefix + ".png"
+    finally:
+        # Without a reload the injected CSS would otherwise stay in the user's view
+        try:
+            driver.execute_script("document.getElementById(arguments[0])?.remove()", EXPORT_STYLE_ID)
+        except Exception as e:
+            print(f"⚠️  Could not remove export CSS: {e}")
+        try:
+            if kiosk_mode == "in-place":
+                _exit_kiosk_in_place(driver, original_url)
+            elif kiosk_mode == "reload":
+                driver.get(original_url)
+        except Exception as e:
+            print(f"⚠️  Could not restore original URL: {e}")
+        try:
+            driver.execute_cdp_cmd("Emulation.clearDeviceMetricsOverride", {})
+        except Exception as e:
+            print(f"⚠️  Could not restore viewport: {e}")
+
+
+def _export_and_report(driver, args) -> bool:
+    notify("Exporting…")
+    try:
+        path = do_export(driver, args.output_dir, args.dpr)
+    except Exception as e:
+        first_line = str(e).strip().splitlines()[0] if str(e).strip() else type(e).__name__
+        notify(f"Export failed: {first_line}")
+        print(f"❌ Export failed: {e}")
+        return False
+    copied = args.clipboard and copy_png_to_clipboard(path)
+    notify(f"PNG saved{' and copied' if copied else ''}: {os.path.basename(path)}")
+    print(f"🎉 PNG saved: {path}{' (copied to clipboard)' if copied else ''}")
+    return True
+
+
+def _consume_trigger(path: str) -> bool:
+    if not os.path.exists(path):
+        return False
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+    return True
 
 
 def _run_loop(driver, args):
+    """Wait for export/stop requests: trigger files on Windows, signals (SIGUSR1/SIGTERM) elsewhere.
+    A periodic keep-alive keeps the ChromeDriver session warm and detects a closed browser."""
     export_count = 0
-    notify("Session ready — navigate to a dashboard, then use 'Export Grafana PNG' in Raycast")
+    export_event = threading.Event()
+    stop_event = threading.Event()
 
-    if platform.system() == "Windows":
+    if SYSTEM == "Windows":
         print("✅ Session ready. Watching for trigger files...")
-        try:
-            last_keepalive = time.monotonic()
-            keepalive_failures = 0
-            while True:
-                if os.path.exists(STOP_TRIGGER):
-                    try:
-                        os.remove(STOP_TRIGGER)
-                    except OSError:
-                        pass
-                    break
-                if os.path.exists(EXPORT_TRIGGER):
-                    try:
-                        os.remove(EXPORT_TRIGGER)
-                    except OSError:
-                        pass
-                    try:
-                        path = do_export(driver, args.output_dir)
-                        export_count += 1
-                        notify(f"PNG saved: {os.path.basename(path)}")
-                        print(f"🎉 PNG saved: {path}")
-                    except Exception as e:
-                        notify(f"Export failed: {e}")
-                        print(f"❌ Export failed: {e}")
-                    last_keepalive = time.monotonic()
-                elif time.monotonic() - last_keepalive >= 15:
-                    try:
-                        driver.execute_script("return 1")
-                        keepalive_failures = 0
-                    except Exception as e:
-                        keepalive_failures += 1
-                        print(f"⚠️ Keep-alive failed ({keepalive_failures}): {e}")
-                        if keepalive_failures >= 3:
-                            print("❌ Browser connection lost, ending session")
-                            break
-                    last_keepalive = time.monotonic()
-                time.sleep(0.5)
-        except KeyboardInterrupt:
-            pass
     else:
+        signal.signal(signal.SIGUSR1, lambda *_: export_event.set())
+        signal.signal(signal.SIGTERM, lambda *_: stop_event.set())
         print("✅ Session ready. Listening for export signals...")
-        _export_event = threading.Event()
-        _stop_event = threading.Event()
+    notify("Session ready - navigate to a dashboard, then use 'Export Grafana PNG' in Raycast")
 
-        def _on_export(signum, frame):
-            _export_event.set()
+    last_keepalive = time.monotonic()
+    keepalive_failures = 0
+    try:
+        while True:
+            if SYSTEM == "Windows":
+                if _consume_trigger(STOP_TRIGGER):
+                    stop_event.set()
+                if _consume_trigger(EXPORT_TRIGGER):
+                    export_event.set()
+            if stop_event.is_set():
+                break
 
-        def _on_stop(signum, frame):
-            _stop_event.set()
-
-        signal.signal(signal.SIGUSR1, _on_export)
-        signal.signal(signal.SIGTERM, _on_stop)
-
-        try:
-            while not _stop_event.is_set():
-                if _export_event.wait(timeout=0.5):
-                    _export_event.clear()
-                    try:
-                        path = do_export(driver, args.output_dir)
-                        export_count += 1
-                        notify(f"PNG saved: {os.path.basename(path)}")
-                        print(f"🎉 PNG saved: {path}")
-                    except Exception as e:
-                        notify(f"Export failed: {e}")
-                        print(f"❌ Export failed: {e}")
-        except KeyboardInterrupt:
-            pass
+            if export_event.wait(timeout=0.5):
+                export_event.clear()
+                if _export_and_report(driver, args):
+                    export_count += 1
+                last_keepalive = time.monotonic()
+            elif time.monotonic() - last_keepalive >= KEEPALIVE_INTERVAL:
+                try:
+                    driver.execute_script("return 1")
+                    keepalive_failures = 0
+                except Exception as e:
+                    keepalive_failures += 1
+                    print(f"⚠️ Keep-alive failed ({keepalive_failures}): {e}")
+                    if keepalive_failures >= KEEPALIVE_MAX_FAILURES:
+                        print("❌ Browser connection lost, ending session")
+                        break
+                last_keepalive = time.monotonic()
+    except KeyboardInterrupt:
+        pass
 
     return export_count
 
@@ -480,25 +524,18 @@ def main():
     parser = argparse.ArgumentParser(description="Grafana → PNG exporter")
     parser.add_argument("--browser", choices=["chrome", "brave", "edge"], default=default_browser,
                         help=f"Browser to use (default on this OS: {default_browser})")
-    parser.add_argument("--username", help="Grafana username (for auto-login)")
-    parser.add_argument("--password", help="Grafana password (for auto-login)")
-    parser.add_argument("--grafana-url", default="http://localhost:3000",
-                        help="Grafana base URL, used when auto-login credentials are provided")
     parser.add_argument("--user-data-dir", help="Override browser profile directory")
     parser.add_argument("--output-dir", default=os.path.expanduser("~/Downloads"),
                         help="Directory to save PNGs (default: ~/Downloads)")
     parser.add_argument("--dpr", type=int, default=4,
                         help="Device pixel ratio for canvas rendering (default: 4)")
+    parser.add_argument("--no-clipboard", dest="clipboard", action="store_false",
+                        help="Don't copy exported PNGs to the clipboard")
 
     args = parser.parse_args()
-    print(f"✅ Browser: {args.browser.upper()}")
 
-    driver = create_driver(args.browser, args.user_data_dir, args.dpr)
-
-    if args.username and args.password:
-        driver.get(f"{args.grafana_url}/login")
-        auto_login(driver, args.username, args.password)
-
+    # Claim the session before the (slow) browser launch, so Raycast commands
+    # see it immediately and a stop requested during startup isn't discarded.
     os.makedirs(DATA_DIR, exist_ok=True)
     for stale in (EXPORT_TRIGGER, STOP_TRIGGER):
         try:
@@ -508,26 +545,34 @@ def main():
     with open(PID_FILE, "w") as f:
         f.write(str(os.getpid()))
 
+    driver = None
+    export_count = 0
     try:
+        print(f"✅ Browser: {args.browser.upper()}")
+        driver = create_driver(args.browser, args.user_data_dir)
         export_count = _run_loop(driver, args)
+    except Exception as e:
+        notify(f"Session failed: {e}")
+        raise
     finally:
         if os.path.exists(PID_FILE):
             os.remove(PID_FILE)
-        chromedriver_pid = None
-        try:
-            chromedriver_pid = driver.service.process.pid
-        except Exception:
-            pass
-        try:
-            driver.quit()
-        except Exception:
-            pass
-        if platform.system() == "Windows" and chromedriver_pid:
-            subprocess.run(
-                ["taskkill", "/F", "/T", "/PID", str(chromedriver_pid)],
-                capture_output=True,
-            )
-        notify(f"Session ended — {export_count} PNG(s) exported")
+        if driver is not None:
+            chromedriver_pid = None
+            try:
+                chromedriver_pid = driver.service.process.pid
+            except Exception:
+                pass
+            try:
+                driver.quit()
+            except Exception:
+                pass
+            if SYSTEM == "Windows" and chromedriver_pid:
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(chromedriver_pid)],
+                    capture_output=True,
+                )
+            notify(f"Session ended - {export_count} PNG(s) exported")
         print(f"\n✅ Done. Exported {export_count} PNG(s).")
 
 

@@ -16,6 +16,16 @@ if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
   exit 0
 fi
 
+UV="$(command -v uv)"
+for candidate in "$HOME/.local/bin/uv" /opt/homebrew/bin/uv /usr/local/bin/uv; do
+  [ -n "$UV" ] && break
+  [ -x "$candidate" ] && UV="$candidate"
+done
+if [ -z "$UV" ]; then
+  osascript -e 'display notification "uv not found - install it first" with title "Grafana Exporter"'
+  exit 1
+fi
+
 mkdir -p "$HOME/.grafana-png-exporter"
-nohup ~/.local/bin/uv run ~/raycast/scripts/grafana-png-export.py \
+nohup "$UV" run ~/raycast/scripts/grafana-png-export.py \
   > "$HOME/.grafana-png-exporter/session.log" 2>&1 &
