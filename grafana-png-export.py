@@ -49,10 +49,33 @@ KEEPALIVE_MAX_FAILURES = 3
 PANEL_LOADING_SELECTOR = '[aria-label="Panel loading bar"], .panel-loading'
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if SYSTEM == "Windows" else 0
 
-# The browser window is sized so the page area is exactly this (CSS px), and the export
-# captures exactly this frame: what you see is what you export, always 16:9.
-EXPORT_VIEWPORT = (1920, 1080)
-PNG_DPI = 300  # 1920×1080 CSS px → 6000×3375 PNG
+# Export formats: page area in CSS px. The browser window is sized so the page area is
+# exactly this, and the export captures exactly this frame (what you see is what you
+# export). Heights stay <= 1200 so the window fits a 1440p screen including browser chrome.
+EXPORT_FORMATS = {
+    "16:9": (1920, 1080),
+    "16:10": (1920, 1200),
+    "4:3": (1600, 1200),
+    "a4-landscape": (1697, 1200),  # 1:sqrt(2)
+    "a4": (849, 1200),
+}
+DEFAULT_FORMAT = "16:9"
+EXPORT_VIEWPORT = EXPORT_FORMATS[DEFAULT_FORMAT]
+PNG_DPI = 300  # same scale for every format: 1920×1080 CSS px → 6000×3375 PNG
+
+
+def parse_format(value: str) -> tuple[int, int]:
+    """A preset name from EXPORT_FORMATS, or a custom 'WIDTHxHEIGHT' in CSS px."""
+    key = value.strip().lower()
+    if key in EXPORT_FORMATS:
+        return EXPORT_FORMATS[key]
+    m = re.fullmatch(r"(\d+)\s*[x×]\s*(\d+)", key)
+    if m:
+        width, height = int(m[1]), int(m[2])
+        if 320 <= width <= 7680 and 240 <= height <= 4320:
+            return width, height
+    raise argparse.ArgumentTypeError(
+        f"invalid format '{value}': use one of {', '.join(EXPORT_FORMATS)} or WIDTHxHEIGHT (e.g. 1400x990)")
 
 
 def platform_default_browser():
@@ -105,7 +128,7 @@ def apply_session_settings(driver):
             print(f"⚠️  Timezone override '{tz}' rejected: {e}")
 
 
-def create_driver(browser_name: str, user_data_dir: str = None):
+def create_driver(browser_name: str, user_data_dir: str = None, viewport=EXPORT_VIEWPORT):
     binary, automation_profile = get_browser_config(browser_name)
     profile_dir = user_data_dir or automation_profile
 
@@ -121,7 +144,7 @@ def create_driver(browser_name: str, user_data_dir: str = None):
     driver = webdriver.Chrome(options=opts)
     print(f"✅ Launched {browser_name.capitalize()} (automation profile: {profile_dir})")
     apply_session_settings(driver)
-    fit_window_to_viewport(driver)
+    fit_window_to_viewport(driver, viewport)
     return driver
 
 
@@ -336,16 +359,16 @@ def _exit_kiosk_in_place(driver, original_url: str):
         driver.get(original_url)
 
 
-def do_export(driver, output_dir: str, dpr: int = 4) -> str:
+def do_export(driver, output_dir: str, dpr: int = 4, viewport=EXPORT_VIEWPORT) -> str:
     pdftoppm = _find_pdftoppm()  # fail fast, before touching the page
     original_url = driver.current_url
     kiosk_mode = None  # None | "in-place" | "reload"
-    width, height = EXPORT_VIEWPORT
+    width, height = viewport
     metrics = {"width": width, "height": height, "deviceScaleFactor": dpr, "mobile": False}
 
     try:
         # Undo any manual resize, so the export matches the window
-        if not fit_window_to_viewport(driver):
+        if not fit_window_to_viewport(driver, viewport):
             notify(f"Window can't fit a {width}x{height} page on this screen - export won't match what you see")
         # Same size as the window (no re-layout); only raises the pixel ratio for sharp canvases.
         driver.execute_cdp_cmd("Emulation.setDeviceMetricsOverride", metrics)
@@ -456,7 +479,7 @@ def do_export(driver, output_dir: str, dpr: int = 4) -> str:
 def _export_and_report(driver, args) -> bool:
     notify("Exporting…")
     try:
-        path = do_export(driver, args.output_dir, args.dpr)
+        path = do_export(driver, args.output_dir, args.dpr, args.format)
     except Exception as e:
         first_line = str(e).strip().splitlines()[0] if str(e).strip() else type(e).__name__
         notify(f"Export failed: {first_line}")
@@ -491,7 +514,8 @@ def _run_loop(driver, args):
         signal.signal(signal.SIGUSR1, lambda *_: export_event.set())
         signal.signal(signal.SIGTERM, lambda *_: stop_event.set())
         print("✅ Session ready. Listening for export signals...")
-    notify("Session ready - navigate to a dashboard, then use 'Export Grafana PNG' in Raycast")
+    width, height = args.format
+    notify(f"Session ready ({width}x{height}) - navigate to a dashboard, then use 'Export Grafana PNG' in Raycast")
 
     last_keepalive = time.monotonic()
     keepalive_failures = 0
@@ -537,6 +561,9 @@ def main():
                         help="Directory to save PNGs (default: ~/Downloads)")
     parser.add_argument("--dpr", type=int, default=4,
                         help="Device pixel ratio for canvas rendering (default: 4)")
+    parser.add_argument("--format", type=parse_format, default=DEFAULT_FORMAT,
+                        help=f"Export format: {', '.join(EXPORT_FORMATS)}, or WIDTHxHEIGHT in CSS px "
+                             f"(default: {DEFAULT_FORMAT}). The browser window is sized to match.")
     parser.add_argument("--no-clipboard", dest="clipboard", action="store_false",
                         help="Don't copy exported PNGs to the clipboard")
 
@@ -557,7 +584,9 @@ def main():
     export_count = 0
     try:
         print(f"✅ Browser: {args.browser.upper()}")
-        driver = create_driver(args.browser, args.user_data_dir)
+        width, height = args.format
+        print(f"✅ Format: {width}×{height} (PNG {round(width / 96 * PNG_DPI)}×{round(height / 96 * PNG_DPI)})")
+        driver = create_driver(args.browser, args.user_data_dir, args.format)
         export_count = _run_loop(driver, args)
     except Exception as e:
         notify(f"Session failed: {e}")

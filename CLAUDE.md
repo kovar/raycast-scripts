@@ -22,9 +22,9 @@ Three Raycast commands per platform: Start Session, Export Now, Stop Session.
 
 ### Export Pipeline
 1. Selenium WebDriver controls Brave (macOS/Windows) or Chrome
-2. Fit the browser window so the page area is exactly `EXPORT_VIEWPORT` (1920×1080 CSS px) —
+2. Fit the browser window so the page area is exactly the session's format (default 1920×1080 CSS px) —
    at session start and again at each export (undoes manual resizes). Then raise the pixel
-   ratio to `--dpr` (default 4) via `setDeviceMetricsOverride` at the same 1920×1080, only for
+   ratio to `--dpr` (default 4) via `setDeviceMetricsOverride` at the same size, only for
    the duration of the export (no re-layout, just sharper canvases)
 3. Enter kiosk mode (`kiosk` + `hideLogo` URL params) **without reloading** (see below)
 4. Inject CSS (`<style id=EXPORT_STYLE_ID>`): hide refresh picker, dashboard tab bar, panel "⋮"
@@ -33,7 +33,8 @@ Three Raycast commands per platform: Start Session, Export Now, Stop Session.
    fix print-mode time picker. **The style element is removed after the export** — with the
    in-place kiosk there is no reload, so it would otherwise stay in the user's live view.
 5. `Page.printToPDF` (CDP) on a single page as tall as the content → PDF file
-6. `pdftoppm -r 300 -png -singlefile -x 0 -y 0 -W 6000 -H 3375` crops the visible frame → PNG
+6. `pdftoppm -r 300 -png -singlefile -x 0 -y 0 -W <w> -H <h>` crops the visible frame → PNG
+   (e.g. 6000×3375 for 16:9; `PNG_DPI` = 300, so 1 CSS px = 3.125 PNG px in every format)
 7. PNG copied to clipboard (image; on Windows also as a file) unless `--no-clipboard`
 8. Browser returns to the original URL and view, viewport override cleared — even on failure
 
@@ -50,11 +51,18 @@ The intermediate PDF lives in a temp dir, never in the output dir.
 Before printing, the export waits (up to 30s) for panel loading bars
 (`[aria-label="Panel loading bar"]`) to disappear, on top of the fixed 5s post-navigation wait.
 
-**What you see is what you export**: every export is exactly the 1920×1080 frame the user sees
-(minus Grafana's header, which kiosk hides), always 6000×3375 at 16:9. Content below the fold is
+**Export formats** (`--format`, chosen in the Start Session dropdown; fixed for the session):
+`EXPORT_FORMATS` presets — `16:9` 1920×1080 (default), `16:10` 1920×1200, `4:3` 1600×1200,
+`a4-landscape` 1697×1200, `a4` 849×1200 — or a custom `WIDTHxHEIGHT` in CSS px (`parse_format`).
+Preset heights stay <= 1200 so the window fits a 1440p screen with browser chrome. A4 portrait is
+849 px wide, just above Grafana's ~769 px single-column breakpoint. Raycast dropdown titles in
+the PS1 wrapper use plain ASCII (`x`, `-`), per the PowerShell gotchas below.
+
+**What you see is what you export**: every export is exactly the frame the user sees
+(minus Grafana's header, which kiosk hides), at a fixed size per format. Content below the fold is
 cut, as on screen. The export captures from the top of the dashboard, even if the user scrolled.
-- If the screen can't fit a 1920×1080 page area (e.g. a 125%-scaled laptop screen), a warning is
-  logged/notified; the export still renders at 1920×1080 but won't match the window.
+- If the screen can't fit the page area (e.g. a 125%-scaled laptop screen), a warning is
+  logged/notified; the export still renders at the format's size but won't match the window.
 - Don't clamp the window position via `screen.avail*`: Brave's fingerprinting protection reports
   fake screen dimensions (2560×1440 at 0,0 on a 3440×1440 secondary monitor).
 
