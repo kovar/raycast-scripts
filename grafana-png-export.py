@@ -399,9 +399,23 @@ def do_export(driver, output_dir: str, dpr: int = 4, viewport=EXPORT_VIEWPORT) -
             pass  # proceed even if selector doesn't match this Grafana version
 
         driver.execute_script("""
+            // Time picker label: Grafana fills its 2nd span with the zone ("UTC", "EDT") only
+            // when the dashboard isn't on browser time. If it's empty, show the browser zone
+            // (abbreviation valid at the range start, e.g. CEST vs CET) via ::after.
+            const picker = '[data-testid="data-testid TimePicker Open Button"] [aria-live]';
+            const label = document.querySelector(picker);
+            let tzRule = '';
+            if (label && label.children.length === 2 && !label.children[1].textContent.trim()) {
+                const start = label.children[0].textContent.match(/\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}/);
+                const at = start ? new Date(start[0].replace(' ', 'T')) : new Date();
+                const zone = new Intl.DateTimeFormat('en-GB', {timeZoneName: 'short'})
+                    .formatToParts(at).find(p => p.type === 'timeZoneName')?.value;
+                if (zone) tzRule = `${picker} > span:last-child:empty::after { content: "${zone}"; }`;
+            }
+
             const style = document.createElement('style');
             style.id = arguments[0];
-            style.textContent = `
+            style.textContent = tzRule + `
                 [data-testid="data-testid RefreshPicker run button"],
                 [data-testid="data-testid RefreshPicker interval button"] { display: none !important; }
                 /* Dashboard tab bar (grouped dashboards); the active tab's panels are still shown */

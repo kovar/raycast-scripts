@@ -32,7 +32,8 @@ Three Raycast commands per platform: Start Session, Export Now, Stop Session.
 4. Inject CSS (`<style id=EXPORT_STYLE_ID>`): hide refresh picker, dashboard tab bar, panel "⋮"
    menu, panel resize handles (`.scene-resize-handle`), the "Add variable" (+) button
    (`.dashboard-canvas-add-button`; its row too when it holds nothing else, so variables stay);
-   fix print-mode time picker. **The style element is removed after the export** — with the
+   fix print-mode time picker; show the timezone in the time picker label (see below).
+   **The style element is removed after the export** — with the
    in-place kiosk there is no reload, so it would otherwise stay in the user's live view.
 5. `Page.printToPDF` (CDP) on a single page as tall as the content → PDF file
 6. `pdftoppm -r 300 -png -singlefile -x 0 -y 0 -W <w> -H <h>` crops the visible frame → PNG
@@ -162,6 +163,13 @@ contain quotes, `$` and newlines. Notifications are fire-and-forget (`Popen`).
 `sys.stdout.reconfigure(..., line_buffering=True)` at script top — line buffering so
 `session.log` is written live; on Windows also `encoding="utf-8", errors="replace"`
 because the cp1252 default can't encode emoji in log output.
+
+### Timezone in the Time Picker Label
+Grafana's label (`[data-testid="data-testid TimePicker Open Button"] [aria-live]`) has a 2nd span
+it fills with the zone ("UTC", "EDT") only when the dashboard timezone isn't `browser`. When it's
+empty, the export adds the browser zone via a CSS `::after` rule in the export style (so it's
+removed with it): the `en-GB` short name (e.g. CEST/CET, else "GMT+x") at the range's start date.
+The browser zone is the system zone via `Emulation.setTimezoneOverride`.
 
 ### @media print CSS Fix
 Grafana's CSS-in-JS hides the time picker label in print mode. Fixed by injecting:
